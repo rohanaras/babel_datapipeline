@@ -14,7 +14,7 @@ class LocalTargetInputs(luigi.ExternalTask):
 class AminerS3Targets(luigi.Task):
     def output(self):
         s3client = s3.S3Client()
-        return s3.S3Target(path='/citation-databases/Aminer/raw/aminer.paper.gz', client=s3client)
+        return s3.S3Target(path='s3://citation-databases/Aminer/raw/aminer.paper.gz', client=s3client)
 
 class AMinerParse(luigi.Task):
     date = luigi.DateParameter()

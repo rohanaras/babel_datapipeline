@@ -23,7 +23,7 @@ class EFExpert(object):
 
         Returns:
         A ranked list of (paper_id, score), descending."""
-        #paper_id = "paper-"+str(paper_id)
+        paper_id = "paper-"+str(paper_id)
         print('\n')
         print(self.G.nodes())
         if paper_id not in self.G.nodes():
