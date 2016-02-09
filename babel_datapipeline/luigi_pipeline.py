@@ -110,7 +110,7 @@ class BibcoupleTask(luigi.Task):
             with open(self.input().path, 'r') as infile:
                 dim = countPapers(infile)
                 bibcouple.main(dim, infile, outfile,
-                                delimiter=' ')
+                               delimiter=' ')
 
 
 class EFTask(luigi.Task):
@@ -135,11 +135,12 @@ class DynamoOutputTask(luigi.Task):
     date = luigi.DateParameter()
 
     def requires(self):
-        return BibcoupleTask(date=self.date)
+        return EFTask(date=self.date)
 
     def run(self):
         from database.transformer import main
-        main('aminer', open(self.input().path, 'r'), create=True,flush=True)
+        for target in self.input():
+            main('aminer', open(target.path, 'r'), create=True, flush=True)
 
 
 def countPapers(infile):

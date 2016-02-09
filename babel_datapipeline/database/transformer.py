@@ -51,15 +51,12 @@ def get_configs():
 
     config.validate(vtor)
     config = config.dict()
-    # print(config)
     return(config)
 
 def main(publisher, filename, create=False, flush=False, dryrun=False, verbose=False, skip=False):
     import sys
     from collections import deque
     from csv import reader
-
-    print(filename)
 
     config = get_configs()
 
