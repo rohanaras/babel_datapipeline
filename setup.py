@@ -56,7 +56,7 @@ setup(
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['scipy', 'networkx', 'boto', 'configobj', 'luigi', 'babel_util'],
+    install_requires=['scipy', 'networkx', 'boto3', 'configobj', 'luigi', 'babel_util'],
 )
 
 with open('requirements.txt', 'r') as f:

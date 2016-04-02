@@ -1,13 +1,13 @@
 import datetime
 import luigi
-from io import *
-from babel_datapipeline.util.misc import *
+from babel_datapipeline.util.misc import makedir
 
 
 class AMinerParse(luigi.Task):
     date = luigi.DateParameter(default=datetime.date.today())
 
     def requires(self):
+        from babel_datapipeline.tasks.io import AminerS3Targets
         return AminerS3Targets()
 
     def output(self):

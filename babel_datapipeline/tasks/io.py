@@ -1,7 +1,7 @@
 import luigi
 import luigi.s3 as s3
-from recommenders import *
 import datetime
+from babel_datapipeline.tasks.recommenders import EFTask
 
 
 class LocalTargetInputs(luigi.ExternalTask):
@@ -25,5 +25,5 @@ class DynamoOutputTask(luigi.Task):
 
     def run(self):
         from babel_datapipeline.database.transformer import main
-        for infile in self.input():
-            main('aminer', open(infile.path, 'r'), create=True,flush=True)
+        main('aminer', open(self.input()[1].path, 'r'), open(self.input()[0].path, 'r'), 'localhost', create=True,
+             flush=True)

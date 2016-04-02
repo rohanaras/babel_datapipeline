@@ -1,131 +1,99 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
-from configobj import ConfigObj
-from storage import Storage
-from contextlib import closing
-import itertools
-from decimal import Decimal
-from boto.exception import JSONResponseError
-from tree_transform import make_tree_rec, process_tree
+from babel_util.storage.dynamo import Table, TABLE_DEFINITION, DATASETS
+import boto3
 import time
 import logging
+from itertools import groupby
+from decimal import Decimal
 
-REC_TYPE_MAP = {"1" : "classic", "2" : "expert"}
 
-def process_dict_stream(stream, conf):
-    filtered_stream = itertools.ifilter(lambda e: e["rectype"] in REC_TYPE_MAP, stream) # Only include the rec types we know and love
-    hashkey_stream = itertools.groupby(filtered_stream, lambda e: "|".join((e["targetdoi"], REC_TYPE_MAP[e["rectype"]], e["EF"])))
-    for (key, stream) in hashkey_stream:
-        # Boto doesn't support lists, ony sets
-        recs = set([s["doi"] for s in stream])
-        yield debucketer(key, recs, conf)
+def id_and_ef(line):
+    line = line.split()
+    return line[0] + '|' + line[2]
 
-def make_key(e):
-    return "|".join((e.target_doi, e.rec_type, str(e.score)))
 
-def process_record_stream(stream, conf):
-    for group in stream:
-        hashkey_stream = itertools.groupby(group, make_key)
-        for (key, stream) in hashkey_stream:
-            # Boto doesn't support lists, ony sets
-            recs = set([s.doi for s in stream])
-            yield debucketer(key, recs, conf)
+def process_edgelist(stream, rec_type):
+    for key, group in groupby(stream, lambda line: id_and_ef(line)):
+        key, ef = key.split('|')
+        group = map(str.split, group)
+        recs = set([s[1] for s in group])
+        yield debucketer(key, rec_type, ef, recs)
 
-def debucketer(key, value, conf):
-    (hash_key, ef) = key.rsplit("|", 1)
-    # Boto's handling of float's is poor. Decimals, however, work fine.
-    # See https://github.com/boto/boto/issues/2413
-    return {conf["hash_key"] : hash_key,
-            conf["range_key"] : Decimal(ef),
-            conf["rec_attribute"] : value}
 
-def get_configs():
-    import os, babel_datapipeline
-    from validate import Validator
+def debucketer(key, rec_type, ef, recs):
+    hash_key = "%s|%s" % (key, rec_type)
+    return {TABLE_DEFINITION["hash_key"]: hash_key,
+            TABLE_DEFINITION["range_key"]: Decimal(ef),
+            TABLE_DEFINITION["rec_attribute"]: recs}
 
-    vtor = Validator()
-    config = ConfigObj(infile=os.path.join(babel_datapipeline.__path__[0], 'configs', 'default.cfg'),
-                   unrepr=True, interpolation="template",
-                   configspec=os.path.join(babel_datapipeline.__path__[0], 'configs', 'confspec.cfg'))
 
-    config.validate(vtor)
-    config = config.dict()
-    # print(config)
-    return(config)
+def main(dataset, expert, classic, region, create=False, flush=False, dryrun=False, verbose=False):
+    if region == "localhost":
+        client = boto3.resource('dynamodb', endpoint_url="http://localhost:8000")
+    else:
+        client = boto3.resource('dynamodb')
 
-def main(publisher, filename, create=False, flush=False, dryrun=False, verbose=False, skip=False):
-    import sys
-    from collections import deque
-    from csv import reader
+    t = Table(client, dataset)
 
-    print(filename)
+    if flush:
+        logging.info("Deleting table: " + t.table_name)
+        if not dryrun:
+            t.delete()
 
-    config = get_configs()
+    if create:
+        logging.info("Creating table: " + t.table_name)
+        if not dryrun:
+            t.create(write=2000)
 
-    if publisher not in config['storage']['publishers']:
-        raise ValueError('Publisher is not valid')
+    entries = 0
+    start = time.time()
 
-    with closing(Storage(config["storage"])) as c:
-        table = c.tables[publisher]
-        if flush:
-            logging.info("Deleting table: " + table.table_name)
-            try:
-                if dryrun is False:
-                    table.delete()
-                time.sleep(20)
-            except JSONResponseError as e:
-                pass # Table doesn't exist, be cool.
+    with t.get_batch_put_context() as batch:
+        print("Generating expert recommendations...")
+        for expert_rec in process_edgelist(expert, 'expert'):
+            if verbose:
+                print(expert_rec)
+            if not dryrun:
+                batch.put_item(expert_rec)
+            entries += 1
+            if entries % 50000 == 0:
+                current_time = time.time()
+                current_rate = entries/(current_time - start)
+                print("\nProcessed {0:,} entries in {1:.0f} seconds: {2:.2f} entries/sec".format(entries, time.time()-start, entries/(time.time()-start)))
+                sys.stdout.flush()
 
-        if create:
-            logging.info("Creating table: " + table.table_name)
-            if dryrun is False:
-                table.create(write=2000) # Just don't forget to turn it back down
-            time.sleep(20) # This call is async, so chill for a bit
+        # Reset for the second pass
+        print("Generating classic recommendations...")
+        for classic_rec in process_edgelist(classic, 'classic'):
+            if verbose:
+                print(classic_rec)
+            if not dryrun:
+                batch.put_item(classic_rec)
+            entries += 1
+            if entries % 50000 == 0:
+                current_time = time.time()
+                current_rate = entries/(current_time - start)
+                print("\nProcessed {0:,} entries in {1:.0f} seconds: {2:.2f} entries/sec".format(entries, time.time()-start, entries/(time.time()-start)))
+                sys.stdout.flush()
+    end = time.time()
+    print("\nProcessed {0:,} entries in {1:.0f} seconds: {2:.2f} entries/sec".format(entries, end-start, entries/(end-start)))
 
-        entries = 0
-        start = time.time()
-
-        if skip:
-            logging.info("Skipping the first line")
-            filename.next()
-
-        reader = reader(filename, delimiter=config["metadata"][publisher]["tree"]["delimiter"])
-        record_reader = itertools.imap(make_tree_rec, reader)
-        entry_stream = process_record_stream(process_tree(record_reader), config["storage"][publisher])
-        rate = deque(maxlen=20)
-        with table.get_batch_put_context() as batch:
-            for entry in entry_stream:
-                if verbose:
-                    print(entry)
-                if dryrun is False:
-                    batch.put_item(entry)
-                entries += 1
-                if entries % 50000 == 0:
-                    current_time = time.time()
-                    current_rate = entries/(current_time - start)
-                    rate.append(current_rate)
-                    sys.stdout.flush()
-        end = time.time()
-        print("\nProcessed {0:,} entries in {1:.0f} seconds: {2:.2f} entries/sec".format(entries, end-start, entries/(end-start)))
-
-        if dryrun is False:
-            table.update_throughput()
+    if not dryrun:
+        t.update_throughput()
 
 if __name__ == '__main__':
     import argparse
+    import sys
 
-    PRODUCTS = ("plos", "jstor", "arxiv", "pubmed", "dblp", "ssrn", "mas", "aminer")
-    parser = argparse.ArgumentParser(description="Transform reccomender output to DynamoDB")
-    parser.add_argument("publisher", help="which publisher", choices=PRODUCTS)
-    parser.add_argument("filename", help="file to transform", type=argparse.FileType('r'))
+    parser = argparse.ArgumentParser(description="Transform recommender output to DynamoDB")
+    parser.add_argument("dataset", help="Dataset", choices=DATASETS)
+    parser.add_argument("expert", help=" expert file to transform", type=argparse.FileType('r'))
+    parser.add_argument("classic", help="classic file to transform", type=argparse.FileType('r'))
+    parser.add_argument("--region", help="Region to connect to", default="localhost")
     parser.add_argument("-c", "--create", help="create table in database", action="store_true")
     parser.add_argument("-f", "--flush", help="flush database.", action="store_true")
     parser.add_argument("-d", "--dryrun", help="Process data, but don't insert into DB", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("-s", "--skip", help="Skip first line", action="store_true")
 
     args = parser.parse_args()
 
-    main(args.publisher, args.filename, args.create, args.flush, args.dryrun, args.verbose, args.skip)
-
+    main(args.dataset, args.expert, args.classic, args.region, args.create, args.flush, args.dryrun, args.verbose)

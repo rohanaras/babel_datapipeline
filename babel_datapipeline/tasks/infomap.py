@@ -3,6 +3,8 @@ from babel_datapipeline.tasks.parsers import *
 import os
 from babel_datapipeline.util.misc import *
 from subprocess import check_output, check_call, STDOUT
+import luigi
+import luigi.s3 as s3
 
 
 class PajekFactory(luigi.Task):
@@ -52,10 +54,10 @@ class InfomapTask(luigi.Task):
                                  stderr=STDOUT, shell=True)
 
         s3client = s3.S3Client()
-        s3client.put_string(infomap_log, 'S3://babel-logging/%s_infomap_output_%s.txt' % (self.dataset, self.date))
+        s3client.put_string(infomap_log, 'S3://babel-logging/%s_infomap_output_%s.txt' % (self.dataset, self.date)) # TODO
 
         for extension in ('tree', 'bftree', 'map'):
             file_path = '%s_%s.%s' % (self.generic_path, self.date, extension)
             check_call(['gzip', file_path])
             file_name = '%s_pajek_%s.%s.gz' % (self.dataset, self.date, extension)
-            s3client.put('%s.gz' % file_path, 'S3://babel-processing/%s' % file_name)
+            s3client.put('%s.gz' % file_path, 'S3://babel-processing/%s' % file_name) # TODO
